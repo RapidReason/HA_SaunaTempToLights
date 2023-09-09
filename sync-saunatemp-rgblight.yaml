@@ -1,0 +1,100 @@
+blueprint:
+  name: Sync sauna temperature with RGB light
+  description: When sauna temperature reaches threshold temp start syncing RGB light color to sauna temp.
+  domain: automation
+  input:
+    target_light:
+      name: RGB light
+      description: Target RGB light
+      selector:
+        entity:
+          domain: light
+          multiple: false
+    cold_temp_value:
+      name: Low temperature treshold
+      description: Cold temperature treshold after which the ligth will start showing RGB color based on temperature
+    cold_color_rgbvalue:
+      name: Cold color RGB value
+      description: RGB value for the coolest temperature your light will be set to.
+      default: "(0, 0, 255)"
+      selector:
+        string:
+          value: "(0, 0, 255)"
+    hot_color_rgbvalue:
+      name: Hot color RGB value
+      description: RGB value for the hottest temperature your light will be set to.
+      default: "(255, 0, 0)"
+      selector:
+        string:
+          value: "(255, 0, 0)"
+    brightness_action:
+      name: Brightness
+      description: When a device turns on its color temperature will be set, this
+        may interfere with the brightness, this action will run half a second later
+        to set the light's brightness.
+      selector:
+        action: {}
+      default:
+      - service: light.turn_on
+        data:
+          brightness: '{{max(trigger.to_state.attributes.brightness,2)}}'
+        target:
+          entity_id: '{{trigger.entity_id}}'
+        alias: Default - Set light to its original brightness, don't use brightness
+          1 as it causes issues with some bulbs
+  source_url: https://gist.github.com/HarvsG/cc86381dc99169159d6d4cd870c36e46
+variables:
+  target_light: !input target_light
+  target_on_lights: '{{states.light | selectattr(''state'',''eq'',''on'') | selectattr(''attributes.supported_color_modes'',''match'',".*color_temp.*")
+    | map(attribute=''entity_id'') | select("in",target_light) | list }}'
+  cold_color_rgbvalue: !input cold_color_rgbvalue
+  hot_color_rgbvalue: !input hot_color_rgbvalue
+  color_temp: '{{ [([(((4791.67 - 3290.66/(1 + 0.222 * ([([0,state_attr(''sun.sun'',
+    ''elevation'')]|max),90]|min**0.81))))|int),hot_color_rgbvalue]|max),cold_color_rgbvalue]|min}}'
+trigger:
+- platform: state
+  entity_id: !input target_light
+  to: 'on'
+  id: single_light_on
+- platform: state
+  entity_id:
+  - sun.sun
+  attribute: elevation
+  id: elevation_change
+- platform: time_pattern
+  minutes: '5'
+  id: every_5_min
+condition:
+- condition: template
+  value_template: '{{ (states.light | selectattr(''state'',''eq'',''on'') | map(attribute=''entity_id'')
+    | list)!= [] }}'
+action:
+- choose:
+  - conditions:
+    - condition: trigger
+      id: single_light_on
+    sequence:
+    - service: light.turn_on
+      data:
+        kelvin: '{{color_temp}}'
+      target:
+        entity_id: '{{trigger.entity_id}}'
+    - delay:
+        milliseconds: 500
+    - choose:
+      default: !input brightness_action
+  - conditions:
+    - condition: or
+      conditions:
+      - condition: trigger
+        id: every_5_min
+      - condition: trigger
+        id: elevation_change
+    sequence:
+    - service: light.turn_on
+      data:
+        kelvin: '{{color_temp}}'
+        transition: 5
+      target:
+        entity_id: '{{target_on_lights}}'
+mode: parallel
